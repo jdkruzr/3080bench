@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Single-user llama.cpp tensor-parallel benchmark of Qwen3.6-27B on 4x modded 20GB RTX 3080s.">
+<title>4× Modded RTX 3080 — Qwen3.6-27B Inference Benchmark</title>
+</head>
+<body>
+<style>
+  :root {
+    color-scheme: light;
+    --plane: #f9f9f7; --surface: #fcfcfb;
+    --ink: #0b0b0b; --ink2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a;
+    --good: #0ca30c; --bad: #d03b3b;
+    --tile: #ffffff; --shadow: 0 1px 2px rgba(11,11,11,.05), 0 1px 12px rgba(11,11,11,.03);
+    --mono: ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --plane: #0d0d0d; --surface: #1a1a19;
+      --ink: #ffffff; --ink2: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+      --s1: #3987e5; --s2: #d95926; --s3: #199e70;
+      --good: #0ca30c; --bad: #e66767;
+      --tile: #201f1e; --shadow: none;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --plane: #0d0d0d; --surface: #1a1a19;
+    --ink: #ffffff; --ink2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --good: #0ca30c; --bad: #e66767;
+    --tile: #201f1e; --shadow: none;
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --plane: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --good: #0ca30c; --bad: #d03b3b;
+    --tile: #ffffff; --shadow: 0 1px 2px rgba(11,11,11,.05), 0 1px 12px rgba(11,11,11,.03);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--plane); color: var(--ink); font-family: var(--sans);
+         line-height: 1.55; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 28px 22px 72px; }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+  /* header */
+  header { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px;
+           border-bottom: 1px solid var(--border); padding-bottom: 20px; }
+  .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+             color: var(--s1); font-weight: 600; }
+  h1 { font-size: clamp(24px, 3.4vw, 34px); line-height: 1.08; margin: 8px 0 6px; letter-spacing: -.02em;
+       text-wrap: balance; font-weight: 800; }
+  .thesis { color: var(--ink2); max-width: 62ch; font-size: 15px; margin: 0; }
+  .thesis b { color: var(--ink); font-weight: 650; }
+  .toggle { flex: none; font-family: var(--mono); font-size: 12px; cursor: pointer; color: var(--ink2);
+            background: var(--tile); border: 1px solid var(--border); border-radius: 8px; padding: 7px 11px; }
+  .toggle:hover { color: var(--ink); }
+  .toggle:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+
+  /* kpi tiles */
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 24px 0 8px; }
+  .tile { background: var(--tile); border: 1px solid var(--border); border-radius: 12px; padding: 15px 16px;
+          box-shadow: var(--shadow); }
+  .tile .k { font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;
+             color: var(--muted); }
+  .tile .v { font-family: var(--mono); font-size: 30px; font-weight: 700; letter-spacing: -.02em;
+             margin: 6px 0 2px; line-height: 1; }
+  .tile .v small { font-size: 15px; font-weight: 600; color: var(--ink2); }
+  .tile .d { font-size: 12.5px; color: var(--ink2); }
+  .tile .up { color: var(--good); font-weight: 650; }
+
+  section { margin-top: 40px; }
+  .sec-h { display: flex; align-items: baseline; gap: 12px; margin-bottom: 4px; }
+  h2 { font-size: 19px; font-weight: 750; letter-spacing: -.01em; margin: 0; }
+  .sec-sub { color: var(--ink2); font-size: 14px; margin: 2px 0 18px; max-width: 70ch; }
+  .num { color: var(--muted); font-family: var(--mono); font-size: 13px; font-weight: 600; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+          padding: 18px 18px 12px; box-shadow: var(--shadow); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .chart-title { font-size: 13.5px; font-weight: 650; margin: 0 0 2px; }
+  .chart-note { font-size: 12px; color: var(--muted); margin: 0 0 6px; }
+
+  /* legend */
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 2px 0 8px; }
+  .lg { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink2);
+        font-family: var(--mono); }
+  .sw { width: 16px; height: 3px; border-radius: 2px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; }
+
+  svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .axl { fill: var(--muted); font-family: var(--mono); font-size: 10.5px; }
+  .axt { fill: var(--muted); font-family: var(--mono); font-size: 11px; letter-spacing: .04em; }
+  .endlab { font-family: var(--mono); font-size: 11px; font-weight: 650; }
+
+  /* tooltip */
+  .tip { position: fixed; pointer-events: none; z-index: 20; background: var(--tile);
+         border: 1px solid var(--border); border-radius: 9px; padding: 8px 10px; box-shadow: 0 4px 16px rgba(0,0,0,.14);
+         font-family: var(--mono); font-size: 12px; opacity: 0; transition: opacity .08s; min-width: 128px; }
+  .tip .tx { color: var(--muted); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 4px; }
+  .tip .row { display: flex; justify-content: space-between; gap: 14px; }
+  .tip .row b { font-weight: 700; }
+
+  details { margin-top: 8px; }
+  summary { font-family: var(--mono); font-size: 11.5px; color: var(--muted); cursor: pointer; list-style: none; }
+  summary::-webkit-details-marker { display: none; }
+  summary:before { content: "▸ "; }
+  details[open] summary:before { content: "▾ "; }
+  table { border-collapse: collapse; width: 100%; margin-top: 8px; font-family: var(--mono);
+          font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 3px 8px; border-bottom: 1px solid var(--grid); }
+  th:first-child, td:first-child { text-align: left; color: var(--ink2); }
+  thead th { color: var(--muted); font-weight: 600; }
+
+  .panels { display: grid; grid-template-columns: 1.1fr 1fr 1fr; gap: 16px; }
+  .stat-line { display: flex; justify-content: space-between; align-items: baseline; padding: 7px 0;
+               border-bottom: 1px solid var(--grid); font-size: 13px; }
+  .stat-line:last-child { border-bottom: 0; }
+  .stat-line .lab { color: var(--ink2); }
+  .stat-line .val { font-family: var(--mono); font-weight: 650; font-variant-numeric: tabular-nums; }
+  .pill { font-family: var(--mono); font-size: 10.5px; padding: 2px 7px; border-radius: 20px; font-weight: 650; }
+  .pill.cap { background: color-mix(in srgb, var(--bad) 15%, transparent); color: var(--bad); }
+  .pill.cool { background: color-mix(in srgb, var(--good) 16%, transparent); color: var(--good); }
+
+  .findings { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 26px; }
+  .find { display: flex; gap: 11px; align-items: flex-start; font-size: 14px; }
+  .find .fn { font-family: var(--mono); font-weight: 700; color: var(--s1); flex: none; width: 22px; }
+  .find b { font-weight: 650; }
+
+  footer { margin-top: 44px; border-top: 1px solid var(--border); padding-top: 18px; color: var(--ink2); font-size: 13px; }
+  code { font-family: var(--mono); font-size: 12px; background: var(--tile); border: 1px solid var(--border);
+         border-radius: 6px; padding: 1px 5px; }
+  .repro { background: var(--tile); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
+           font-family: var(--mono); font-size: 11.5px; color: var(--ink2); overflow-x: auto; white-space: pre; margin-top: 10px; }
+  .repro b { color: var(--s2); font-weight: 700; }
+  @media (max-width: 760px) {
+    .kpis { grid-template-columns: 1fr 1fr; } .grid2, .panels, .findings { grid-template-columns: 1fr; }
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <div class="eyebrow">Cursed Inference Lab II · llama.cpp · single-user</div>
+      <h1>4× modded 20GB RTX 3080 — Qwen3.6-27B</h1>
+      <p class="thesis">Tensor-parallel inference on four clamshell-modded 3080s (stock GA102, 760 GB/s, no P2P) in a China datacenter. The verdict: <b>run Q8 with the MTP head</b> — <b>~95 tok/s</b> decode, <b>2.4×</b> the 8× RTX 5060 Ti box, at full quant quality.</p>
+    </div>
+    <button class="toggle" id="themeBtn" aria-label="Toggle theme">◐ theme</button>
+  </header>
+
+  <div class="kpis">
+    <div class="tile"><div class="k">Champion decode</div><div class="v">95<small> tok/s</small></div><div class="d">Q8 + MTP, tensor, 32K ctx</div></div>
+    <div class="tile"><div class="k">vs 8× 5060 Ti</div><div class="v">2.4×</div><div class="d"><span class="up">▲</span> faster single-user decode</div></div>
+    <div class="tile"><div class="k">MTP speedup</div><div class="v">1.8×</div><div class="d">~80% draft acceptance</div></div>
+    <div class="tile"><div class="k">256K ctx fits</div><div class="v">11<small> GB/GPU</small></div><div class="d">of 20 GB · hybrid-SSM KV</div></div>
+  </div>
+
+  <section>
+    <div class="sec-h"><h2>Speculative decode is the whole ballgame</h2><span class="num">Q8 · tensor · 220W</span></div>
+    <p class="sec-sub">Decode throughput vs context, on realistic coding prompts (<code>cache_prompt=false</code>). The model's trained multi-token-prediction head nearly doubles single-stream speed; prompt-lookup n-gram <em>backfires</em> on this latency-bound interconnect.</p>
+    <div class="card">
+      <div class="legend" id="lg-spec"></div>
+      <div id="chart-spec"></div>
+      <details><summary>data table</summary><div id="tbl-spec"></div></details>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-h"><h2>Quant &amp; context scaling</h2><span class="num">synthetic · llama-bench</span></div>
+    <p class="sec-sub">Q6_K_XL vs Q8_0 across the full 512→256K sweep. Prefill favors Q8 by 2–5%; decode is a <b>dead heat</b> — the 5060 Ti's Q6-decode edge vanishes because decode here is bound by the quant-independent no-P2P all-reduce latency, not weight streaming. Falloff is graceful (SSM layers are O(1) in context).</p>
+    <div class="grid2">
+      <div class="card">
+        <p class="chart-title">Token generation (decode)</p>
+        <p class="chart-note">tok/s · higher is better · log context axis</p>
+        <div class="legend" id="lg-tg"></div>
+        <div id="chart-tg"></div>
+      </div>
+      <div class="card">
+        <p class="chart-title">Prompt processing (prefill)</p>
+        <p class="chart-note">tok/s · higher is better · log context axis</p>
+        <div class="legend" id="lg-pp"></div>
+        <div id="chart-pp"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-h"><h2>Why it wins vs the 8× 5060 Ti box</h2><span class="num">matched · 4-GPU tensor · Q6 · short ctx</span></div>
+    <p class="sec-sub">Cores/FLOPS explain prefill (+20%), memory bandwidth explains decode (+39%), and the shared no-P2P wall trims both. The 1.89× CUDA-core headline is the number <em>not</em> to quote — Blackwell's higher clocks erase most of it.</p>
+    <div class="grid2">
+      <div class="card">
+        <p class="chart-title">Throughput, same config</p>
+        <p class="chart-note">3080 vs 5060 Ti · tok/s</p>
+        <div class="legend" id="lg-cmp"></div>
+        <div id="chart-cmp"></div>
+      </div>
+      <div class="card">
+        <p class="chart-title">The silicon (measured)</p>
+        <div style="margin-top:6px">
+          <div class="stat-line"><span class="lab">CUDA cores</span><span class="val">8704 <span style="color:var(--muted)">vs 4608</span> · 1.89×</span></div>
+          <div class="stat-line"><span class="lab">FP32</span><span class="val">29.8 <span style="color:var(--muted)">vs 23.7</span> · 1.26×</span></div>
+          <div class="stat-line"><span class="lab">Memory BW</span><span class="val">760 <span style="color:var(--muted)">vs 448</span> · 1.70×</span></div>
+          <div class="stat-line"><span class="lab">Interconnect</span><span class="val">Gen3×16 ≈ Gen4×8</span></div>
+          <div class="stat-line"><span class="lab">P2P</span><span class="val" style="color:var(--bad)">disabled (both)</span></div>
+          <div class="stat-line"><span class="lab">Bin</span><span class="val">3080 · 68 SM · 320-bit</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-h"><h2>Interconnect, ubatch &amp; thermals</h2><span class="num">the supporting cast</span></div>
+    <div class="panels">
+      <div class="card">
+        <p class="chart-title">Intercard PCIe by phase</p>
+        <p class="chart-note">Gen3 ×16 ceiling ≈ 15.75 GB/s</p>
+        <div id="chart-pcie" style="margin-top:6px"></div>
+      </div>
+      <div class="card">
+        <p class="chart-title">n_ubatch → prefill</p>
+        <p class="chart-note">default 512 is near-optimal</p>
+        <div class="legend" id="lg-ub" style="margin-top:4px"></div>
+        <div id="chart-ub"></div>
+      </div>
+      <div class="card">
+        <p class="chart-title">Power &amp; thermals @ 220W</p>
+        <div style="margin-top:8px">
+          <div class="stat-line"><span class="lab">Power draw</span><span class="val">220W <span class="pill cap">CAPPED</span></span></div>
+          <div class="stat-line"><span class="lab">Peak temp</span><span class="val">67°C <span class="pill cool">COOL</span></span></div>
+          <div class="stat-line"><span class="lab">SM clock</span><span class="val">~1770 MHz</span></div>
+          <div class="stat-line"><span class="lab">VRAM used</span><span class="val">~11–12 GB</span></div>
+        </div>
+        <p class="chart-note" style="margin-top:10px">Power-limited, not thermal-limited — the locked-away 320W headroom would likely help, but the container denies <code>nvidia-smi -pl</code>.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-h"><h2>Findings</h2></div>
+    <div class="findings">
+      <div class="find"><span class="fn">01</span><div><b>-sm tensor works on no-P2P GeForce.</b> Loads qwen35 across 4 cards; 256K fits at ~11 GB/GPU. (Row-split <em>crashed</em> on the 5060 Ti box.)</div></div>
+      <div class="find"><span class="fn">02</span><div><b>MTP ≈ 1.8× decode</b>, ~80% acceptance, peaks 95 t/s @32K. The config to ship.</div></div>
+      <div class="find"><span class="fn">03</span><div><b>n-gram is a net loss</b> (~2.7× slower, ~40% accept) — partly our cold-cache / short-gen methodology.</div></div>
+      <div class="find"><span class="fn">04</span><div><b>Just run Q8.</b> Prefill +2–5% vs Q6, decode a tie — the bandwidth-bound quant advantage disappears behind the latency floor.</div></div>
+      <div class="find"><span class="fn">05</span><div><b>The interconnect is the ceiling.</b> High-context prefill bursts saturate Gen3 ×16 (~15 GB/s) — that's the long-context falloff.</div></div>
+      <div class="find"><span class="fn">06</span><div><b>Sweet spot by default.</b> 4 cards = no 8-way TP collapse; ubatch tuning ≤4%; cards power-capped but thermally idle.</div></div>
+    </div>
+  </section>
+
+  <footer>
+    <b style="color:var(--ink)">Constraints:</b> 220W only (container denies power control — 320W untested) · <code>layer</code> split dropped (structurally ≪ tensor for single-stream) · single-user <code>-np 1</code> · n-gram handicapped by cold cache · models via hf-mirror (huggingface.co is GFW-sinkholed).
+    <div class="repro">llama-server -m Qwen3.6-27B-MTP-Q8_0.gguf <b>-sm tensor</b> -fa on -ngl 999 \
+  -c 262144 -np 1 -ctk f16 -ctv f16 <b>--spec-type draft-mtp</b> --port 8081</div>
+    <p style="color:var(--muted);font-size:12px;margin-top:14px">Qwen3.6-27B (qwen35, hybrid SSM+attention) · llama.cpp b10076 · CUDA 12.9 / sm_86 · 2026-07-23</p>
+  </footer>
+</div>
+
+<div class="tip" id="tip"></div>
+
+<script>
+(function(){
+  var root = document.documentElement;
+  function sysDark(){ return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches; }
+  document.getElementById("themeBtn").addEventListener("click", function(){
+    var cur = root.getAttribute("data-theme") || (sysDark() ? "dark" : "light");
+    root.setAttribute("data-theme", cur === "dark" ? "light" : "dark");
+    setTimeout(renderAll, 0);
+  });
+  function cssv(n){ return getComputedStyle(document.body).getPropertyValue(n).trim(); }
+
+  // ---------- data ----------
+  var DEPTHS = [512,1024,2048,4096,8192,16384,32768,49152,65536,98304,131072,196608,262144];
+  var Q6_TG = [54.78,54.39,54.57,53.58,53.93,53.38,52.01,50.87,49.04,47.64,45.58,42.35,38.32];
+  var Q8_TG = [53.68,53.62,53.51,53.35,52.95,52.21,51.0,49.85,48.43,46.84,44.97,41.17,38.99];
+  var Q6_PP = [1392.4,1311.67,1352.97,1366.59,1354.4,1335.02,1294.3,1252.65,1218.29,1141.86,1080.91,969.43,876.32];
+  var Q8_PP = [1457.79,1336.62,1386.54,1387.67,1383.91,1366.48,1324.1,1280.51,1244.92,1168.3,1104.24,988.81,892.6];
+  var SPEC_X = [496,4109,33021,98991,197095,258903];
+  var S_NONE = [51.92,50.73,48.63,44.76,40.15,37.79];
+  var S_MTP  = [92.84,85.83,95.36,78.25,70.36,69.3];
+  var S_NGRAM= [20.92,19.37,18.39,17.01,15.32,17.55];
+  var MTP_ACC= [0.77,0.76,0.86,0.75,0.77,0.87];
+  var UB = [256,512,1024,2048,4096];
+  var UB98 = [1080,1144,1189,1194,1162];
+  var UB256= [843,875,879,840,833];
+
+  function pairs(xs, ys){ return xs.map(function(x,i){ return [x, ys[i]]; }); }
+
+  // ---------- log-x line chart with hover ----------
+  var W = 500, H = 260, ML = 46, MR = 46, MT = 14, MB = 34;
+  function xlab(v){ return v>=1024 ? (v/1024).toFixed(v%1024?0:0).replace(/\.0$/,'')+"K" : String(v); }
+  function niceK(v){ return v>=1000 ? Math.round(v) : v; }
+
+  function lineChart(elId, series, opts){
+    var el = document.getElementById(elId);
+    var xmin = Math.log2(opts.xmin), xmax = Math.log2(opts.xmax);
+    var ymin = 0, ymax = opts.ymax;
+    var iw = W-ML-MR, ih = H-MT-MB;
+    function X(v){ return ML + (Math.log2(v)-xmin)/(xmax-xmin)*iw; }
+    function Y(v){ return MT + ih - (v-ymin)/(ymax-ymin)*ih; }
+    var s = '<svg viewBox="0 0 '+W+' '+H+'" role="img" preserveAspectRatio="xMidYMid meet">';
+    // y grid + ticks
+    var yt = opts.yticks;
+    for(var i=0;i<yt.length;i++){ var yy=Y(yt[i]);
+      s+='<line x1="'+ML+'" x2="'+(W-MR)+'" y1="'+yy+'" y2="'+yy+'" stroke="'+cssv('--grid')+'" stroke-width="1"/>';
+      s+='<text class="axl" x="'+(ML-8)+'" y="'+(yy+3.5)+'" text-anchor="end">'+yt[i]+'</text>';
+    }
+    // x ticks
+    opts.xticks.forEach(function(xv){ var xx=X(xv);
+      s+='<text class="axt" x="'+xx+'" y="'+(H-MB+18)+'" text-anchor="middle">'+xlab(xv)+'</text>';
+    });
+    s+='<text class="axl" x="'+ML+'" y="'+(H-2)+'" text-anchor="start" style="letter-spacing:.06em">CONTEXT (tokens)</text>';
+    // baseline
+    s+='<line x1="'+ML+'" x2="'+(W-MR)+'" y1="'+Y(0)+'" y2="'+Y(0)+'" stroke="'+cssv('--axis')+'" stroke-width="1"/>';
+    // series
+    series.forEach(function(se){
+      var d = se.pts.map(function(p,i){ return (i?'L':'M')+X(p[0]).toFixed(1)+' '+Y(p[1]).toFixed(1); }).join(' ');
+      s+='<path d="'+d+'" fill="none" stroke="'+cssv(se.cvar)+'" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
+      se.pts.forEach(function(p){ s+='<circle cx="'+X(p[0]).toFixed(1)+'" cy="'+Y(p[1]).toFixed(1)+'" r="3.4" fill="'+cssv('--surface')+'" stroke="'+cssv(se.cvar)+'" stroke-width="1.8"/>'; });
+      var last = se.pts[se.pts.length-1];
+      s+='<text class="endlab" x="'+(X(last[0])+7)+'" y="'+(Y(last[1])+3.5)+'" fill="'+cssv(se.cvar)+'">'+se.end+'</text>';
+    });
+    // hover targets
+    s+='<line id="'+elId+'-cross" x1="0" x2="0" y1="'+MT+'" y2="'+(MT+ih)+'" stroke="'+cssv('--axis')+'" stroke-width="1" stroke-dasharray="3 3" opacity="0"/>';
+    s+='<rect id="'+elId+'-hit" x="'+ML+'" y="'+MT+'" width="'+iw+'" height="'+ih+'" fill="transparent"/>';
+    s+='</svg>';
+    el.innerHTML = s;
+    // interaction
+    var svg = el.querySelector('svg'), cross = document.getElementById(elId+'-cross'), tip = document.getElementById('tip');
+    var hit = document.getElementById(elId+'-hit');
+    function toData(clientX){
+      var r = svg.getBoundingClientRect(); var px = (clientX-r.left)/r.width*W;
+      var lg = xmin + (px-ML)/iw*(xmax-xmin); var xv = Math.pow(2,lg);
+      // nearest index by log distance
+      var idx=0, best=1e9;
+      series[0].pts.forEach(function(p,i){ var dd=Math.abs(Math.log2(p[0])-lg); if(dd<best){best=dd;idx=i;} });
+      return idx;
+    }
+    function move(ev){
+      var cx = ev.touches ? ev.touches[0].clientX : ev.clientX;
+      var cy = ev.touches ? ev.touches[0].clientY : ev.clientY;
+      var idx = toData(cx); var xv = series[0].pts[idx][0];
+      var r = svg.getBoundingClientRect(); var xpx = X(xv);
+      cross.setAttribute('x1', xpx); cross.setAttribute('x2', xpx); cross.setAttribute('opacity','1');
+      var html = '<div class="tx">ctx '+xlab(xv)+'</div>';
+      series.forEach(function(se){ var v = se.pts[idx][1];
+        html += '<div class="row"><span><span class="dot" style="display:inline-block;background:'+cssv(se.cvar)+'"></span> '+se.name+'</span><b>'+(se.fmt?se.fmt(v):v.toFixed(1))+'</b></div>'; });
+      tip.innerHTML = html; tip.style.opacity = 1;
+      var tx = cx+14, ty = cy-10;
+      if(tx+150 > window.innerWidth) tx = cx-160;
+      tip.style.left = tx+'px'; tip.style.top = ty+'px';
+    }
+    hit.addEventListener('mousemove', move);
+    hit.addEventListener('touchmove', function(e){ move(e); }, {passive:true});
+    hit.addEventListener('mouseleave', function(){ tip.style.opacity=0; cross.setAttribute('opacity','0'); });
+  }
+
+  // grouped bars (comparison)
+  function barChart(elId, groups, series, opts){
+    var el = document.getElementById(elId);
+    var w=500,h=250, ml=44,mr=16,mt=14,mb=40, iw=w-ml-mr, ih=h-mt-mb;
+    var ymax=opts.ymax, gw=iw/groups.length, bw=Math.min(46,(gw-24)/series.length);
+    function Y(v){ return mt+ih-(v/ymax)*ih; }
+    var s='<svg viewBox="0 0 '+w+' '+h+'" role="img">';
+    opts.yticks.forEach(function(t){ var yy=Y(t); s+='<line x1="'+ml+'" x2="'+(w-mr)+'" y1="'+yy+'" y2="'+yy+'" stroke="'+cssv('--grid')+'"/>'; s+='<text class="axl" x="'+(ml-8)+'" y="'+(yy+3.5)+'" text-anchor="end">'+t+'</text>'; });
+    groups.forEach(function(g,gi){
+      var gx = ml + gi*gw + (gw-bw*series.length-6*(series.length-1))/2;
+      series.forEach(function(se,si){
+        var v=se.vals[gi], x=gx+si*(bw+6), y=Y(v), bh=mt+ih-y;
+        s+='<rect x="'+x.toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+bh.toFixed(1)+'" rx="4" fill="'+cssv(se.cvar)+'"/>';
+        s+='<text class="endlab" x="'+(x+bw/2).toFixed(1)+'" y="'+(y-5).toFixed(1)+'" text-anchor="middle" fill="'+cssv(se.cvar)+'">'+v+'</text>';
+      });
+      s+='<text class="axt" x="'+(ml+gi*gw+gw/2).toFixed(1)+'" y="'+(h-mb+18)+'" text-anchor="middle">'+g+'</text>';
+    });
+    s+='<line x1="'+ml+'" x2="'+(w-mr)+'" y1="'+Y(0)+'" y2="'+Y(0)+'" stroke="'+cssv('--axis')+'"/>';
+    s+='</svg>'; el.innerHTML=s;
+  }
+
+  function legend(elId, items){
+    document.getElementById(elId).innerHTML = items.map(function(it){
+      return '<span class="lg"><span class="sw" style="background:'+cssv(it.cvar)+'"></span>'+it.name+'</span>';
+    }).join('');
+  }
+  function table(elId, head, rows){
+    var s='<table><thead><tr>'+head.map(function(h){return '<th>'+h+'</th>';}).join('')+'</tr></thead><tbody>';
+    s+=rows.map(function(r){ return '<tr>'+r.map(function(c,i){return '<td>'+c+'</td>';}).join('')+'</tr>'; }).join('');
+    document.getElementById(elId).innerHTML = s+'</tbody></table>';
+  }
+
+  function renderAll(){
+    // spec cross
+    legend('lg-spec',[{name:'MTP',cvar:'--s2'},{name:'none (baseline)',cvar:'--s1'},{name:'n-gram',cvar:'--s3'}]);
+    lineChart('chart-spec',[
+      {name:'MTP',cvar:'--s2',end:'MTP',pts:pairs(SPEC_X,S_MTP)},
+      {name:'none',cvar:'--s1',end:'none',pts:pairs(SPEC_X,S_NONE)},
+      {name:'n-gram',cvar:'--s3',end:'ngram',pts:pairs(SPEC_X,S_NGRAM)}
+    ],{xmin:480,xmax:360000,ymax:100,yticks:[0,25,50,75,100],xticks:[512,4096,32768,131072,262144]});
+    table('tbl-spec',['ctx','MTP tok/s','accept','none','n-gram'],
+      SPEC_X.map(function(x,i){ return [xlab(x), S_MTP[i].toFixed(1), MTP_ACC[i].toFixed(2), S_NONE[i].toFixed(1), S_NGRAM[i].toFixed(1)]; }));
+
+    // quant tg / pp
+    legend('lg-tg',[{name:'Q8_0',cvar:'--s2'},{name:'Q6_K_XL',cvar:'--s1'}]);
+    lineChart('chart-tg',[
+      {name:'Q8',cvar:'--s2',end:'Q8',pts:pairs(DEPTHS,Q8_TG)},
+      {name:'Q6',cvar:'--s1',end:'Q6',pts:pairs(DEPTHS,Q6_TG)}
+    ],{xmin:480,xmax:360000,ymax:60,yticks:[0,20,40,60],xticks:[512,8192,65536,262144]});
+    legend('lg-pp',[{name:'Q8_0',cvar:'--s2'},{name:'Q6_K_XL',cvar:'--s1'}]);
+    lineChart('chart-pp',[
+      {name:'Q8',cvar:'--s2',end:'Q8',pts:pairs(DEPTHS,Q8_PP),fmt:function(v){return Math.round(v);}},
+      {name:'Q6',cvar:'--s1',end:'Q6',pts:pairs(DEPTHS,Q6_PP),fmt:function(v){return Math.round(v);}}
+    ],{xmin:480,xmax:360000,ymax:1600,yticks:[0,400,800,1200,1600],xticks:[512,8192,65536,262144]});
+
+    // comparison bars
+    legend('lg-cmp',[{name:'4× RTX 3080',cvar:'--s2'},{name:'4× RTX 5060 Ti',cvar:'--s1'}]);
+    barChart('chart-cmp',['Prefill','Decode','Decode+MTP'],[
+      {cvar:'--s2',vals:[1392,55,95]},
+      {cvar:'--s1',vals:[1119,40,40]}
+    ],{ymax:1600,yticks:[0,400,800,1200,1600]});
+
+    // pcie phases (horizontal-ish via bars on log-ish) -> simple bar
+    (function(){
+      var el=document.getElementById('chart-pcie'); var w=320,h=150,ml=8,mt=8, bh=26, gap=16;
+      var data=[{l:'decode',v:0.05,c:'--s1'},{l:'prefill (typical)',v:3.3,c:'--s3'},{l:'prefill burst',v:15.5,c:'--s2'}];
+      var max=15.75, iw=w-ml-70;
+      var s='<svg viewBox="0 0 '+w+' '+h+'" role="img">';
+      // ceiling
+      var cx=ml+ (15.75/max)*iw;
+      s+='<line x1="'+cx+'" x2="'+cx+'" y1="4" y2="'+(mt+data.length*(bh+gap))+'" stroke="'+cssv('--bad')+'" stroke-width="1" stroke-dasharray="3 3"/>';
+      s+='<text class="axl" x="'+cx+'" y="'+(mt+data.length*(bh+gap)+12)+'" text-anchor="end" fill="'+cssv('--bad')+'">Gen3×16 ceiling</text>';
+      data.forEach(function(d,i){ var y=mt+i*(bh+gap); var bw=Math.max(2,(d.v/max)*iw);
+        s+='<rect x="'+ml+'" y="'+y+'" width="'+bw.toFixed(1)+'" height="'+bh+'" rx="4" fill="'+cssv(d.c)+'"/>';
+        s+='<text class="axt" x="'+ml+'" y="'+(y-4)+'">'+d.l+'</text>';
+        s+='<text class="endlab" x="'+(ml+bw+6)+'" y="'+(y+bh/2+4)+'" fill="'+cssv(d.c)+'">'+(d.v<0.1?'~0':d.v)+' GB/s</text>';
+      });
+      s+='</svg>'; el.innerHTML=s;
+    })();
+
+    // ubatch
+    legend('lg-ub',[{name:'98K',cvar:'--s2'},{name:'256K',cvar:'--s1'}]);
+    (function(){
+      var el=document.getElementById('chart-ub'); var w=320,h=170,ml=40,mr=30,mt=10,mb=28,iw=w-ml-mr,ih=h-mt-mb;
+      var ymax=1300,ymin=700;
+      function X(i){ return ml + i/(UB.length-1)*iw; }
+      function Y(v){ return mt+ih-(v-ymin)/(ymax-ymin)*ih; }
+      var s='<svg viewBox="0 0 '+w+' '+h+'" role="img">';
+      [700,900,1100,1300].forEach(function(t){ var yy=Y(t); s+='<line x1="'+ml+'" x2="'+(w-mr)+'" y1="'+yy+'" y2="'+yy+'" stroke="'+cssv('--grid')+'"/><text class="axl" x="'+(ml-6)+'" y="'+(yy+3)+'" text-anchor="end">'+t+'</text>'; });
+      UB.forEach(function(u,i){ s+='<text class="axt" x="'+X(i)+'" y="'+(h-mb+16)+'" text-anchor="middle">'+u+'</text>'; });
+      [{v:UB98,c:'--s2'},{v:UB256,c:'--s1'}].forEach(function(se){
+        var d=se.v.map(function(y,i){ return (i?'L':'M')+X(i).toFixed(1)+' '+Y(y).toFixed(1); }).join(' ');
+        s+='<path d="'+d+'" fill="none" stroke="'+cssv(se.c)+'" stroke-width="2" stroke-linecap="round"/>';
+        se.v.forEach(function(y,i){ s+='<circle cx="'+X(i)+'" cy="'+Y(y)+'" r="3" fill="'+cssv('--surface')+'" stroke="'+cssv(se.c)+'" stroke-width="1.6"/>'; });
+      });
+      s+='<text class="axl" x="'+ml+'" y="'+(h-2)+'" style="letter-spacing:.06em">n_ubatch</text>';
+      s+='</svg>'; el.innerHTML=s;
+    })();
+  }
+  renderAll();
+  window.addEventListener('resize', function(){ /* svg is responsive; tooltips recompute on move */ });
+})();
+</script>
+</body>
+</html>
